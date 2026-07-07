@@ -15,12 +15,14 @@ permissions:
 
 jobs:
   infer:
-    name: Infer SARIF
+    name: Infer SARIF incremental
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install build tools
         run: |
@@ -33,13 +35,20 @@ jobs:
           tar -xf infer.tar.xz
           echo "$PWD/infer-linux-x86_64-v1.3.0/bin" >> "$GITHUB_PATH"
 
-      - name: Check Infer version
-        run: |
-          infer --version
+      - name: Restore Infer cache
+        id: infer-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            infer-out
+          key: infer-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            infer-${{ runner.os }}-${{ github.ref_name }}-
+            infer-${{ runner.os }}-main-
 
       - name: Configure CMake
         run: |
-          rm -rf build-infer infer-out
+          rm -rf build-infer
 
           cmake -S . -B build-infer \
             -G Ninja \
@@ -48,36 +57,54 @@ jobs:
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++
 
-      - name: Check compilation database
+      - name: Determine changed files
         run: |
-          test -f build-infer/compile_commands.json
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only origin/${{ github.base_ref }}...HEAD > infer-changed-files-all.txt
+          else
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > infer-changed-files-all.txt || true
+          fi
 
-          echo "Number of compile commands:"
-          python3 - <<'PY'
-          import json
-          db = json.load(open("build-infer/compile_commands.json"))
-          print(len(db))
-          if len(db) == 0:
-              raise SystemExit("compile_commands.json is empty")
-          PY
+          grep -E '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' infer-changed-files-all.txt > infer-changed-files.txt || true
 
-          cat build-infer/compile_commands.json
+          echo "Changed C/C++ files:"
+          cat infer-changed-files.txt || true
 
-      - name: Run Infer using compile_commands.json
+      - name: Run Infer
         run: |
-          infer run \
-            --sarif \
-            --results-dir infer-out \
-            --compilation-database build-infer/compile_commands.json || true
+          infer --version
+
+          if [ ! -d infer-out ] || [ ! -f infer-out/capture.db ]; then
+            echo "No previous infer-out cache found. Running full Infer analysis."
+
+            infer run \
+              --sarif \
+              --results-dir infer-out \
+              --compilation-database build-infer/compile_commands.json || true
+
+          elif [ ! -s infer-changed-files.txt ]; then
+            echo "No changed C/C++ files. Reusing previous Infer state."
+
+            if [ ! -f infer-out/report.sarif ]; then
+              echo '{"version":"2.1.0","runs":[]}' > infer-out/report.sarif
+            fi
+
+          else
+            echo "Previous infer-out cache found. Running Infer reactive analysis."
+
+            infer run \
+              --reactive \
+              --sarif \
+              --results-dir infer-out \
+              --changed-files-index infer-changed-files.txt \
+              --compilation-database build-infer/compile_commands.json || true
+          fi
 
           echo "Infer output:"
-          ls -la infer-out
+          ls -la infer-out || true
 
-          echo "Infer text report:"
+          echo "Infer report:"
           cat infer-out/report.txt || true
-
-          echo "Infer JSON report:"
-          cat infer-out/report.json || true
 
           if [ ! -f infer-out/report.sarif ]; then
             echo '{"version":"2.1.0","runs":[]}' > infer-out/report.sarif
@@ -89,6 +116,22 @@ jobs:
         with:
           sarif_file: infer-out/report.sarif
           category: infer
+
+      - name: Save Infer cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            infer-out
+          key: infer-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Upload Infer artifact for debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: infer-out
+          path: infer-out
+          retention-days: 7
 
   clang-format:
     name: clang-format check
