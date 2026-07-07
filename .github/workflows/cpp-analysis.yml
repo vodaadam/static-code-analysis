@@ -169,7 +169,7 @@ jobs:
       - name: Install clang-format
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang-format
+          sudo apt-get install -y clang-format python3
 
       - name: Collect C/C++ files
         run: |
@@ -178,21 +178,86 @@ jobs:
             '*.h' '*.hh' '*.hpp' '*.hxx' \
             > format-files.txt
 
-          echo "Files checked by clang-format:"
           cat format-files.txt
 
-      - name: Run clang-format
+      - name: Run clang-format dry-run
         run: |
           if [ -s format-files.txt ]; then
-            xargs -a format-files.txt -r clang-format -i
+            xargs -a format-files.txt -r clang-format --dry-run --Werror \
+              2> clang-format.txt || true
+          else
+            touch clang-format.txt
           fi
 
-      - name: Show formatting diff
+          cat clang-format.txt
+
+      - name: Convert clang-format output to SARIF
         run: |
-          if ! git diff --quiet; then
-            echo "clang-format would change these files:"
-            git diff --color=always
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          text = Path("clang-format.txt").read_text(errors="replace")
+          pattern = re.compile(r"^(.*?):(\d+):(\d+):\s+error:\s+(.*)$")
+
+          results = []
+          for line in text.splitlines():
+              m = pattern.match(line)
+              if not m:
+                  continue
+
+              file, row, col, msg = m.groups()
+
+              results.append({
+                  "ruleId": "clang-format",
+                  "level": "error",
+                  "message": {"text": msg},
+                  "locations": [{
+                      "physicalLocation": {
+                          "artifactLocation": {"uri": file},
+                          "region": {
+                              "startLine": int(row),
+                              "startColumn": int(col)
+                          }
+                      }
+                  }]
+              })
+
+          sarif = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {
+                      "driver": {
+                          "name": "clang-format",
+                          "informationUri": "https://clang.llvm.org/docs/ClangFormat.html",
+                          "rules": [{
+                              "id": "clang-format",
+                              "name": "clang-format",
+                              "shortDescription": {
+                                  "text": "File is not formatted according to .clang-format"
+                              }
+                          }]
+                      }
+                  },
+                  "results": results
+              }]
+          }
+
+          Path("clang-format.sarif").write_text(json.dumps(sarif, indent=2))
+          PY
+
+      - name: Upload clang-format SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: clang-format.sarif
+          category: clang-format
+
+      - name: Fail if formatting is wrong
+        run: |
+          if [ -s clang-format.txt ]; then
+            echo "clang-format found formatting problems."
             exit 1
           fi
-
-          echo "clang-format OK"
