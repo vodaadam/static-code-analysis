@@ -25,7 +25,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build build-essential curl xz-utils
+          sudo apt-get install -y cmake ninja-build build-essential curl xz-utils clang
 
       - name: Install Infer
         run: |
@@ -33,22 +33,55 @@ jobs:
           tar -xf infer.tar.xz
           echo "$PWD/infer-linux-x86_64-v1.3.0/bin" >> "$GITHUB_PATH"
 
+      - name: Check Infer version
+        run: |
+          infer --version
+
       - name: Configure CMake
         run: |
+          rm -rf build-infer infer-out
+
           cmake -S . -B build-infer \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
 
-      - name: Run Infer
+      - name: Check compilation database
+        run: |
+          test -f build-infer/compile_commands.json
+
+          echo "Number of compile commands:"
+          python3 - <<'PY'
+          import json
+          db = json.load(open("build-infer/compile_commands.json"))
+          print(len(db))
+          if len(db) == 0:
+              raise SystemExit("compile_commands.json is empty")
+          PY
+
+          cat build-infer/compile_commands.json
+
+      - name: Run Infer using compile_commands.json
         run: |
           infer run \
             --sarif \
             --results-dir infer-out \
-            -- cmake --build build-infer --parallel 2 || true
+            --compilation-database build-infer/compile_commands.json || true
 
-          ls -la infer-out || true
-          test -f infer-out/report.sarif || echo '{"version":"2.1.0","runs":[]}' > infer-out/report.sarif
+          echo "Infer output:"
+          ls -la infer-out
+
+          echo "Infer text report:"
+          cat infer-out/report.txt || true
+
+          echo "Infer JSON report:"
+          cat infer-out/report.json || true
+
+          if [ ! -f infer-out/report.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > infer-out/report.sarif
+          fi
 
       - name: Upload Infer SARIF
         if: always()
