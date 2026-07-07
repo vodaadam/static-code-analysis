@@ -4010,3 +4010,12 @@ int funs() {
     free(my_ptr);
     return 0;
 }
+// infer demo change 1783334197
+// infer demo change 1783334645
+// infer demo change 1783334736
+// infer demo change 1783334772
+// infer demo change 1783334860
+// infer demo change 1783366843
+// infer demo change 1783366943
+// infer demo change 1783406145
+// infer demo change 1783422622

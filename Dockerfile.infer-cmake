@@ -1,0 +1,8 @@
+FROM infer
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    cmake \
+    build-essential \
+    ninja-build \
+    time \
+    && rm -rf /var/lib/apt/lists/*

@@ -14,7 +14,7 @@ void funs2(int *ptr) {
 }
 
 void funs3(int *ptr) {
-    funs2(ptr);
+    funs0(ptr);
 }
 
 void funs4(int *ptr) {
@@ -4002,10 +4002,10 @@ void funs999(int *ptr) {
 }
 
 void funs1000(int *ptr) {
-    funs999(ptr);
+    funs998(ptr);
 }
 
-int main() {
+int fun() {
     int *my_ptr = (int*)malloc(sizeof(int));
     funs1000(my_ptr);
     free(my_ptr);
